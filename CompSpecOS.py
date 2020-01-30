@@ -40,23 +40,34 @@ def main():
     dwl = np.mean(dwls)
     wlf = np.mean(wlfs)
     
-    wl_obs = np.arange(wl0, wlf, dwl)
+    wl_obs = np.arange(wl0, wlf-dwl, dwl)
     wl_obsarr = np.tile(wl_obs, (200,1))
     wl_rest = np.stack([wl_obsarr[i,:] /(1. + redshifts[i]) for i in range(np.size(redshifts))], axis=0) # shift all to rest frame
+    wl_rest = wl_rest.flatten()
+    fluxes = fluxes.flatten()
+    # create common wavelength grid
+    cwl = np.arange(1000, 2000, 1)
     
+
+    # find median flux values
+    med_flux = []
+    for j in range(1000, 2000, 1):
+        mask = (j < wl_rest) & (wl_rest < j+1)
+        median = np.median(fluxes[mask])
+        med_flux.append(median)
     
-    flux_stack = np.median(fluxes, axis=0)
-    wl_stack = np.median(wl_rest, axis=0)
-    wl_stack = np.delete(wl_stack, 2154)
-
-    print(np.amax(redshifts), np.amin(redshifts))
-
-    # plot spectrum:
-    plt.plot(wl_stack, flux_stack, color='black', lw=1.) 
+    mx = max(med_flux)
+    mn = min(med_flux)
+        
+        
+    # plot spectrum: 
+    plt.figure(figsize=(20.,10.), edgecolor='black')
+    plt.plot(cwl, med_flux, color='black', lw=1.) 
     #plt.plot(wl_rest, flux_error, color='red', lw=1.)
-    plt.ylim(np.amin(flux_stack), np.amax(flux_stack))
-    plt.xlabel('Wavelength / A', fontsize=15)
-    plt.ylabel('Flux / erg/s/cm^2/A', fontsize=15)
+    plt.ylim(mn-0.25*mx, mx+0.25*mx)
+    plt.xlabel(r'Wavelength / $\AA$', fontsize=15)
+    plt.ylabel(r'Flux / erg/s/cm$^2$/$\AA$', fontsize=15)
+    plt.tick_params(axis='both', direction='in', left=True, right=True, top=True, bottom=True, which='both')
     plt.show()
 
 
