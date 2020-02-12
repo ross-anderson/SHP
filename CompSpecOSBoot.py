@@ -5,39 +5,80 @@ Course: Senior Honours Project
 """
 
 from astropy.io import fits
-from astropy.stats import bootstrap
+#from astropy.stats import bootstrap, sigma_clip
+import astropy.stats as s
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 import math as m
 import time
 
+def chi_fn(x,*params):
+    """
+    Method to calculate the chi^2 value for a set of data 
+    given a set of initial parameters.
+    """
+
+    #Set variables and parameters
+    Av, delta, B = x
+    obs, model, err = data
+
+
+    #calculate chi^2 components
+    raw_chi=((model-data)/err)**2
+    chi_fn.raw_chi_sq=np.sum(raw_chi, axis=1)
+
+
+    #calculate min chi^2
+    chi_sq=np.amin(chi_fn.raw_chi_sq)
+
+
+    return round(chi_sq,3)
+
 def main():
 
     start = time.time()
 
-    # list fits files:
+    # list fits and model files:
     files = os.listdir('./vandels_spectra')
+    mfiles = os.listdir('./models')
 
     # get mass and redshift information:
     binarr = np.loadtxt('vandels_stellar_masses.dat', dtype=str)
+    
+    # read in model spectra:
+    mod_lflux = np.stack([np.loadtxt('./models/%s' %f, dtype=str) for f in mfiles], axis=0)
+    zlabels = [os.path.splitext(file)[0] for file in mfiles]
 
+    # mask out clean wavelength regions:
+    xxwl = np.loadtxt('DirtyLambda.csv', dtype=float, usecols=0)
+    xxwln = np.size(xxwl)
+    print(np.size(mod_lflux, axis=0))
+    mask = [mod_lflux[:,:,0][ii] != xxwl for ii in range(np.size(mod_lflux, axis=0))]
+    
+    print(np.shape(mod_lflux[mask]))
+    
+main()
+"""
     # create solar mass bins:
     fileno = np.size(binarr, axis=0)
     binno = 10.
-    massarr = np.asfarray([binarr[i][2] for i in range(fileno)])
+    massarr = np.sort(np.asfarray([binarr[i][2] for i in range(fileno)]))
     mass_range = np.ptp(massarr)
-    parse = mass_range/binno
-    binmin = np.amin(massarr)
+    parse = fileno/binno
+    binmin = 0
     binn = {}
     for j in range(int(binno)):
         binn[j] = []
-        lwr = binmin + j*parse
-        upr = binmin + (j+1)*parse
+        lwr = round(binmin + j*parse)
+        upr = round(binmin + (j+1)*parse)-1
+        print(upr-lwr)
+        lwrm = massarr[lwr]
+        uprm = massarr[upr]
         for i in range(fileno):
             mass = float(binarr[i][2])
             filename = binarr[i][0]
-            if lwr <= mass <= upr:
+            if lwrm <= mass <= uprm:
                 binn[j].append(filename)
     
 
@@ -79,15 +120,22 @@ def main():
         err = []
         for k in range(1000, 2000, 1):
             mask = (k < wl_rest) & (wl_rest < k+1)
-            median = np.median(fluxes[mask])
+            clippedfluxes = s.sigma_clip(fluxes[mask], masked=False)
+            median = np.median(clippedfluxes)
             med_flux.append(median)
-            bootarr = bootstrap(fluxes[mask], 100)
+            bootarr = s.bootstrap(clippedfluxes, 100)
             bootmed = np.median(bootarr, axis=1)
             sigma = np.std(bootmed)
             err.append(sigma)
         
         mx = max(med_flux)
         mn = min(med_flux)
+
+
+        # execute chi minimisation function:
+        ranges=(slice(0., 5., 1.),slice(-1., 1., 0.5.), slice(0., 3., 1.))
+        data = (med_flux, , err)
+        chi_data = optimize.brute(chi_fn, ranges, args=data, full_output=True, finish=None)
     
         
         # plot spectrum: 
@@ -95,7 +143,7 @@ def main():
         plt.plot(cwl, med_flux, color='black', lw=1.) 
         plt.plot(cwl, err, color='red', lw=1.)
         plt.ylim(mn-0.25*mx, mx+0.25*mx)
-        plt.title(r'Composite Spectrum: %s $\leq$ m $\leq$ %s' %(round(lwr,3),round(upr,3)))
+        plt.title(r'Composite Spectrum: %s $\leq$ m $\leq$ %s' %(round(lwrm,3),round(uprm,3)))
         plt.xlabel(r'Wavelength / $\AA$', fontsize=15)
         plt.ylabel(r'Flux / erg/s/cm$^2$/$\AA$', fontsize=15)
         plt.tick_params(axis='both', direction='in', left=True, right=True, top=True, bottom=True, which='both')
@@ -108,3 +156,4 @@ def main():
 
 main()
 
+"""
