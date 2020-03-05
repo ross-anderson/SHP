@@ -58,38 +58,57 @@ def chi_fn(x,*params):
 
     return round(chi_sq,3)
 
+def m_norm(x, *params):
+    """
+    Method to calculate normalization constant for model flux values
+    """
+    Av, delta, B = x
+    obs, model_in, err, wl = params
+
+    #dust attenuation
+    Alambda = attenuation_salim_2018(wl/10000., Av, B, delta)
+    model = model_in*(10**(-0.4*Alambda))
+
+    #calculate beta components
+    beta_num = np.sum(model*obs/err**2.)
+    beta_denom = np.sum((model/err)**2.)
+    beta = beta_num/beta_denom
+    
+    return beta
+
 def main():
 
     start = time.time()
 
     # list fits and model files:
     files = os.listdir('./vandels_spectra')
-    mfiles = os.listdir('./models')
+    mfiles = os.listdir('./models2')
 
     # get mass and redshift information:
     binarr = np.loadtxt('vandels_stellar_masses.dat', dtype=str)
     
     # read in model spectra:
-    modl_spec = np.stack([np.loadtxt('./models/%s' %f, dtype=str) for f in mfiles], axis=0)
+    modl_spec = np.stack([np.loadtxt('./models2/%s' %f, dtype=str) for f in mfiles], axis=0)
     modl_wl = np.asarray(modl_spec[:,:,0], dtype=float)
     modl_flux = np.asarray(modl_spec[:,:,1], dtype=float)
-    zlabels = [os.path.splitext(file)[0] for file in mfiles]
-
+    zlabels = [os.path.splitext(file)[0].split('-')[2] for file in mfiles]
+    
     # mask out clean wavelength regions:
-    xxwl = np.loadtxt('DirtyLambda.csv', dtype=float, usecols=0)
+    xxwl = np.loadtxt('DirtyLambda2.csv', dtype=float, usecols=0)
     xxwln = np.size(xxwl)
     xxmask = np.isin(modl_wl, xxwl, invert=True)
     cmodl_flux = np.stack([modl_flux[ii][xxmask[ii]] for ii in range(5)])
     cmodl_wl = np.stack([modl_wl[ii][xxmask[ii]] for ii in range(5)])
 
-    # convert units:
-    cmodl_flux = (10.**cmodl_flux)*(10.e-23)*(3.e8/cmodl_wl**2.)*((1/6)*1e-2)
+    # convert model flux from logflam to flam:
+    cmodl_flux = (10.**cmodl_flux)
+    modl_flux = (10.**modl_flux)
     
     
 
     # create solar mass bins:
     fileno = np.size(binarr, axis=0)
-    binno = 2.
+    binno = 10.
     massarr = np.sort(np.asfarray([binarr[i][2] for i in range(fileno)]))
     mass_range = np.ptp(massarr)
     parse = fileno/binno
@@ -160,7 +179,6 @@ def main():
         maskxx = np.isin(cwl, xxwl, invert=True)
         cobs_flux = obs_flux[maskxx]
         ccwl = cwl[maskxx]
-        print(ccwl[0])
         err = np.asarray(err)
         cerr = err[maskxx]
 
@@ -171,44 +189,55 @@ def main():
         # execute chi minimisation function:
         mn_chi = []
         adb = []
-        ranges=(slice(0., 5., 1.),slice(-1., 1., 0.5), slice(0., 3., 1.))
-        for i in range(5):
+        ranges=(slice(0., 5., 0.1),slice(-1., 1., 0.05), slice(0., 3., 0.1))
+        for i in range(2):
             # extract model values comparable to observed values
             maskobs = np.isin(cmodl_wl[i], ccwl)
-            modl_flux = cmodl_flux[i][maskobs]
-            data = (cobs_flux, modl_flux, cerr, ccwl)
+            obs_modl_flux = cmodl_flux[i][maskobs]
+            data = (cobs_flux, obs_modl_flux, cerr, ccwl)
             chi_data = optimize.brute(chi_fn, ranges, args=data, full_output=True, finish=None)
             mn_chi.append(chi_data[1])
             adb.append(chi_data[0])
 
         N = mn_chi.index(min(mn_chi))
-        modl_flux = cmodl_flux[N][maskobs]
+
+        # align wavelength grids:
+        maskobs = np.isin(modl_wl[N], cwl)
+        aligned_modl_flux = modl_flux[N][maskobs]
+        aligned_modl_wl = modl_wl[N][maskobs]
         A = adb[N][0]
         D = adb[N][1]
         B = adb[N][2]
-        Alambda = attenuation_salim_2018(ccwl/10000., A, B, D)
-        print(Alambda)
-        #print(cobs_flux)
-        modl_flux = modl_flux*(10**(-0.4*Alambda))
-        
-        mx = np.amax(np.array([np.amax(modl_flux), np.amax(cobs_flux)]))
-        mn = np.amin(cerr)
+        Alambda = attenuation_salim_2018(aligned_modl_wl/10000., A, B, D)
+        adb = (A, D, B)
+        nmodl_flux = m_norm(adb, obs_flux, aligned_modl_flux, err, aligned_modl_wl)*aligned_modl_flux*(10**(-0.4*Alambda))
+        chisq = min(mn_chi)
+        rchisq = chisq/(np.size(ccwl)-4.)
+
+        mx = np.amax(np.array([np.amax(nmodl_flux), np.amax(obs_flux)]))
+        mn = np.amin(err)
         print(A,D,B)
-        print(min(mn_chi))
+        
         
         # plot spectrum: 
         hfont = {'fontname':'Liberation Serif'}
         plt.figure(figsize=(20.,10.), edgecolor='black')
-        plt.plot(ccwl, cobs_flux, color='black', lw=1.) 
-        plt.plot(ccwl, modl_flux, color='blue', lw=1.)
-        plt.plot(ccwl, cerr, color='red', lw=1.)
+        #ax = plt.figure().add_subplot(111)
+        plt.plot(cwl, obs_flux, color='black', lw=1.) 
+        plt.plot(cwl, nmodl_flux, color='blue', lw=1.)
+        plt.plot(cwl, err, color='red', lw=1.)
         plt.ylim(mn-0.25*mx, mx+0.25*mx)
-        plt.title(r'Composite Spectrum: %s $\leq$ m $\leq$ %s' %(round(lwrm,3),round(uprm,3)), fontsize=35, **hfont)
-        plt.xlabel(r'Wavelength / $\AA$', fontsize=35, **hfont)
+        for i in range(len(ccwl)-1):
+            xmin=ccwl[i]-0.5
+            xmax=ccwl[i]+0.5
+            plt.axvspan(xmin, xmax, alpha=0.25, color='cadetblue', lw=0.)
+        plt.xlim(1200, 2000)
+        plt.title(r'%s $\leq$ m $\leq$ %s // %s // $\chi^2_\nu$ %s' %(round(lwrm,3),round(uprm,3), zlabels[N], round(rchisq,3)), fontsize=35, **hfont)
+        plt.xlabel(r'Rest Wavelength / $\AA$', fontsize=35, **hfont)
         plt.ylabel(r'F$_{\lambda}$ / erg/s/cm$^2$/$\AA$', fontsize=35, **hfont)
         plt.tick_params(axis='both', direction='in', left=True, right=True, top=True, bottom=True, which='both', labelsize=20)
-        plt.show()
-        #plt.savefig(fname='Vandels_CompSpec_%s' %j, fmt='png')
+        #plt.show()
+        plt.savefig(fname='Vandels_CompSpec2_ModelvsData%s' %j, fmt='png')
 
 
     runtime = round(time.time()-start,2)
